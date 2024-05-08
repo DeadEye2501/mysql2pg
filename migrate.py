@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime
 from urllib.parse import quote_plus
 from sqlalchemy.dialects.postgresql import INET
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import (
     create_engine, MetaData, PrimaryKeyConstraint, text, inspect, and_, Table, Column, Boolean, Text, String, DateTime,
     Integer, BigInteger, Enum, ARRAY, Date, Time, LargeBinary, DOUBLE_PRECISION
@@ -67,6 +68,31 @@ def check_table_existence(connection, table_name):
     return connection.execute(query).scalar()
 
 
+def repair_ids(connection, postgres_table):
+    if 'id' in postgres_table.columns:
+        if postgres_table.primary_key is None or not len(postgres_table.primary_key.columns.keys()):
+            query = f"alter table {postgres_table.name} add constraint {postgres_table.name}_pkey primary key (id);"
+            connection.execute(text(query))
+
+
+def repair_autoincrement(connection, postgres_table):
+    if postgres_table.autoincrement_column is None:
+        if postgres_table.primary_key is None or not len(postgres_table.primary_key.columns.keys()):
+            id_col = 'id'
+        else:
+            id_col = list(postgres_table.primary_key.columns.keys())[0]
+        seq_name = f"{postgres_table.name}_id_seq"
+        queries = [
+            f"create sequence if not exists {seq_name};",
+            f"alter table {postgres_table.name} "
+            f"alter column {id_col} set default nextval('{seq_name}');",
+            f"update {postgres_table.name} set "
+            f"{id_col} = nextval('{seq_name}') where {id_col} is null;"
+        ]
+        for query in queries:
+            connection.execute(text(query))
+
+
 def repair_sequences(connection, postgres_table, echo=False):
     id = postgres_table.autoincrement_column.name
     if echo:
@@ -77,6 +103,32 @@ def repair_sequences(connection, postgres_table, echo=False):
             connection.execute(text(f'alter sequence "{postgres_table.name}_id_seq" restart with {max_id + 1};'))
     else:
         raise RuntimeError()
+
+
+def repair_datatypes(connection, mysql_table, postgres_table):
+    for mysql_column in mysql_table.columns:
+        if str(mysql_column.type).startswith('VARCHAR'):
+            for column in postgres_table.columns:
+                if column.name == mysql_column.name:
+                    length = mysql_column.type.length
+                    if length != column.type.length:
+                        print(mysql_column.type.length, column.type.length)
+                        connection.execute(text(f'alter table {postgres_table.name} alter column '
+                                                f'"{column.name}" type varchar({length})'))
+                    break
+
+
+def repair_all(postgres_engine, postgres_metadata, echo=False):
+    postgres_tables = postgres_metadata.tables.values()
+    for postgres_table in postgres_tables:
+        with postgres_engine.begin() as connection:
+            repair_ids(connection, postgres_table)
+    for postgres_table in postgres_tables:
+        with postgres_engine.begin() as connection:
+            repair_autoincrement(connection, postgres_table)
+    for postgres_table in postgres_tables:
+        with postgres_engine.begin() as connection:
+            repair_sequences(connection, postgres_table, echo=echo)
 
 
 def update_content_data(mysql_engine, postgres_engine, mysql_table, postgres_table):
@@ -199,18 +251,19 @@ def create_new_table(connection, mysql_table, table_name, postgres_metadata):
 
 
 def migrate_data(
-        mysql_user,
-        mysql_password,
-        mysql_host,
-        mysql_name,
-        postgres_user,
-        postgres_password,
-        postgres_host,
-        postgres_name,
-        con=False,
-        use_csv=False,
-        repair=False,
-        info=False
+    mysql_user,
+    mysql_password,
+    mysql_host,
+    mysql_name,
+    postgres_user,
+    postgres_password,
+    postgres_host,
+    postgres_name,
+    con=False,
+    use_csv=False,
+    repair=False,
+    info=False,
+    echo=True
 ):
     use_csv = False  # TODO: later
     postgres_engine = create_engine(
@@ -221,19 +274,24 @@ def migrate_data(
     start_time = datetime.now()
 
     if repair:
-        postgres_tables = postgres_metadata.tables.values()
-        summary = [0, 0]
-        for postgres_table in postgres_tables:
-            with postgres_engine.begin() as connection:
-                try:
-                    repair_sequences(connection, postgres_table, echo=True)
-                    summary[0] += 1
-                except: # noqa
-                    summary[1] += 1
+        repair_all(postgres_engine, postgres_metadata, echo=echo)
+        try:
+            mysql_engine = create_engine(f'mysql://{mysql_user}:{quote_plus(mysql_password)}@{mysql_host}/{mysql_name}')
+            mysql_metadata = MetaData()
+            mysql_metadata.reflect(bind=mysql_engine, views=True)
+            mysql_tables = mysql_metadata.tables.values()
+            for mysql_table in mysql_tables:
+                postgres_table = postgres_metadata.tables.get(mysql_table.name[:63].lower())
+                if postgres_table is None:
+                    continue
+                with postgres_engine.begin() as connection:
+                    repair_datatypes(connection, mysql_table, postgres_table)
+        except OperationalError:
+            pass
 
-        txt = f"\nRepair finished, complete tables: {summary[0]}, failed tables: {summary[1]}," \
-              f" time spent: {datetime.now() - start_time}"
-        sys.stdout.write(txt)
+        if echo:
+            txt = f"\nRepair finished, time spent: {datetime.now() - start_time}"
+            sys.stdout.write(txt)
 
     elif info:
         mysql_engine = create_engine(f'mysql://{mysql_user}:{quote_plus(mysql_password)}@{mysql_host}/{mysql_name}')
@@ -291,6 +349,9 @@ def migrate_data(
                         continue
 
                 with postgres_engine.begin() as connection:
+                    repair_datatypes(connection, mysql_table, postgres_table)
+
+                with postgres_engine.begin() as connection:
                     if mysql_table.name in clean_tables['mysql']:
                         pass
                     elif not connection.execute(postgres_table.select().limit(1)).fetchone():
@@ -311,6 +372,19 @@ def migrate_data(
                     raise RuntimeError('Not all tables migrated successfully')
                 break
 
+        repair_all(postgres_engine, postgres_metadata)
+        migrate_data(
+            mysql_user,
+            mysql_password,
+            mysql_host,
+            mysql_name,
+            postgres_user,
+            postgres_password,
+            postgres_host,
+            postgres_name,
+            repair=True,
+            echo=False
+        )
         sys.stdout.write(f'\nMigration finished! Time spent: {datetime.now() - start_time}')
 
 
