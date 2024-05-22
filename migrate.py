@@ -78,7 +78,13 @@ def repair_ids(connection, postgres_table):
 def repair_autoincrement(connection, postgres_table):
     if postgres_table.autoincrement_column is None:
         if postgres_table.primary_key is None or not len(postgres_table.primary_key.columns.keys()):
-            id_col = 'id'
+            id_col = ''
+            for column in postgres_table.columns:
+                if column.name == 'id':
+                    id_col = 'id'
+                    break
+            if not id_col:
+                return
         else:
             id_col = list(postgres_table.primary_key.columns.keys())[0]
         seq_name = f"{postgres_table.name}_id_seq"
@@ -94,15 +100,15 @@ def repair_autoincrement(connection, postgres_table):
 
 
 def repair_sequences(connection, postgres_table, echo=False):
-    id = postgres_table.autoincrement_column.name
-    if echo:
-        sys.stdout.write(f'\n({postgres_table.name}) - id: {id}')
-    if id:
-        max_id = connection.execute(text(f'select max({id}) from "{postgres_table.name}";')).scalar()
-        if max_id is not None:
-            connection.execute(text(f'alter sequence "{postgres_table.name}_id_seq" restart with {max_id + 1};'))
-    else:
-        raise RuntimeError()
+    if not postgres_table.autoincrement_column is None:
+        id_col = postgres_table.autoincrement_column.name
+        if echo:
+            sys.stdout.write(f'\n({postgres_table.name}) - id: {id_col}')
+        if id_col:
+            max_id = connection.execute(text(f'select max({id_col}) from "{postgres_table.name}";')).scalar()
+            if max_id is not None:
+                connection.execute(
+                    text(f'alter sequence "{postgres_table.name}_{id_col}_seq" restart with {max_id + 1};'))
 
 
 def repair_datatypes(connection, mysql_table, postgres_table):
