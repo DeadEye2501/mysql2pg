@@ -44,6 +44,13 @@ self_ref_tables = ()
 non_csv_tables = ()
 
 
+def create_hash():
+    length = 5
+    letters = string.ascii_lowercase
+    random_string = ''.join(random.choice(letters) for _ in range(length))
+    return random_string
+
+
 def generate_random_string(length=5):
     letters = string.ascii_letters
     return ''.join(random.choice(letters) for _ in range(length))
@@ -122,6 +129,35 @@ def repair_datatypes(connection, mysql_table, postgres_table):
                         connection.execute(text(f'alter table {postgres_table.name} alter column '
                                                 f'"{column.name}" type varchar({length})'))
                     break
+
+
+def repair_indexes(connection, mysql_table, postgres_table):
+    if len(mysql_table.indexes) == len(postgres_table.indexes):
+        return
+    mysql_cols, postgres_cols = [], []
+    for mysql_index in mysql_table.indexes:
+        mysql_cols.append([col.name.lower() for col in mysql_index.columns])
+    for postgres_index in postgres_table.indexes:
+        postgres_cols.append([col.name.lower() for col in postgres_index.columns])
+    for postgres_col in postgres_cols:
+        if postgres_col in mysql_cols:
+            mysql_cols.remove(postgres_col)
+    for mysql_col in mysql_cols:
+        index = None
+        for mysql_index in mysql_table.indexes:
+            if [col.name.lower() for col in mysql_index.columns] == mysql_col:
+                index = mysql_index
+                break
+        if not index:
+            continue
+        index_name = index.name if len(index.name) < 60 else index.name[:59]
+        index_name += f'_{create_hash()}'
+        query = f'create {"unique " if index.unique else ""}index {index_name} ' \
+                f'on {postgres_table.name} ({f", ".join(mysql_col)});'
+        try:
+            connection.execute(text(query))
+        except:
+            pass
 
 
 def repair_all(postgres_engine, postgres_metadata, echo=False):
@@ -292,6 +328,7 @@ def migrate_data(
                     continue
                 with postgres_engine.begin() as connection:
                     repair_datatypes(connection, mysql_table, postgres_table)
+                    repair_indexes(connection, mysql_table, postgres_table)
         except OperationalError:
             pass
 
@@ -379,6 +416,12 @@ def migrate_data(
                 break
 
         repair_all(postgres_engine, postgres_metadata)
+        for mysql_table in mysql_tables:
+            postgres_table = postgres_metadata.tables.get(mysql_table.name[:63].lower())
+            if postgres_table is None:
+                continue
+            with postgres_engine.begin() as connection:
+                repair_indexes(connection, mysql_table, postgres_table)
         migrate_data(
             mysql_user,
             mysql_password,
