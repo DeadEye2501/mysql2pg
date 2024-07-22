@@ -96,12 +96,17 @@ def repair_autoincrement(connection, postgres_table):
         else:
             id_col = list(postgres_table.primary_key.columns.keys())[0]
         seq_name = f"{postgres_table.name}_id_seq"
+        column_type = str(postgres_table.columns[id_col].type)
+        if column_type.startswith('TIMESTAMP') or column_type.startswith('DATETIME'):
+            default_value = f"to_timestamp(nextval('{seq_name}'))"
+        else:
+            default_value = f"nextval('{seq_name}')"
         queries = [
             f"create sequence if not exists {seq_name};",
             f"alter table {postgres_table.name} "
-            f"alter column {id_col} set default nextval('{seq_name}');",
+            f"alter column {id_col} set default {default_value};",
             f"update {postgres_table.name} set "
-            f"{id_col} = nextval('{seq_name}') where {id_col} is null;"
+            f"{id_col} = {default_value} where {id_col} is null;"
         ]
         for query in queries:
             connection.execute(text(query))
