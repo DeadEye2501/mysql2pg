@@ -1,6 +1,16 @@
+# Миграция на Postgres
+
+Скрипт создан для полного переноса структуры базы и всех данных из mysql в postgres.
+
 ## Для запуска
 - `pip install -r requirements.txt`
-- `python migrate.py <mysql_user> <mysql_password> <mysql_host> <mysql_name> <postgres_user> <postgres_password> <postgres_host> <postgres_name>`
-- `-c` to continue aborted migration
-- `-r` to repair sequences and ids
-- `-i` to info
+- создать новую пустую базу `postgres`
+- в `.env` прописать переменные для подключения к этой базе
+- `python manage.py mysql2pg <mysql_user> <mysql_password> <mysql_host> <mysql_db_name> <postgres_user>
+<postgres_password> <postgres_host> <postgres_db_name> <дополнительные ключи>`
+
+Список ключей:
+- `-c` continue. Запустив скрипт с этим флагов можно продолжить прерванную ранее миграцию.
+- `-i` info. Позволяет найти отсутствующие таблицы и таблицы с различным количеством записей.
+- `-u` use csv. Позволяет использовать миграцию через csv для существенного ускорения миграции.
+- `-r` repair. Позволяет починить индексы, последовательности, автоинкременты.

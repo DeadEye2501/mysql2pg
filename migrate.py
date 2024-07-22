@@ -1,4 +1,5 @@
 import sys
+import json
 import string
 import random
 import argparse
@@ -125,7 +126,6 @@ def repair_datatypes(connection, mysql_table, postgres_table):
                 if column.name == mysql_column.name:
                     length = mysql_column.type.length
                     if length != column.type.length:
-                        print(mysql_column.type.length, column.type.length)
                         connection.execute(text(f'alter table {postgres_table.name} alter column '
                                                 f'"{column.name}" type varchar({length})'))
                     break
@@ -211,6 +211,12 @@ def add_table_data(connection, mysql_engine, postgres_engine, mysql_table, postg
                 for row in chunk:
                     new_row = {}
                     for key, value in row._asdict().items(): # noqa
+                        if isinstance(value, str):
+                            try:
+                                decoded_value = json.loads(value)
+                                value = json.dumps(decoded_value)
+                            except json.JSONDecodeError:
+                                pass
                         new_row[key.lower()] = value
                     data_to_insert.append(new_row)
 
@@ -349,6 +355,20 @@ def migrate_data(
             if postgres_table is None:
                 mismatched_tables_count += 1
                 sys.stdout.write(f'\nTable {table_name} not found in postgres database')
+            else:
+                with mysql_engine.begin() as connection:
+                    mysql_count_query = f'select count(*) from {mysql_table.name}'
+                    mysql_cursor = connection.execute(text(mysql_count_query))
+                    mysql_count = mysql_cursor.scalar()
+                with postgres_engine.begin() as connection:
+                    postgres_count_query = f'select count(*) from "{table_name}"'
+                    postgres_cursor = connection.execute(text(postgres_count_query))
+                    postgres_count = postgres_cursor.scalar()
+                if mysql_count != postgres_count:
+                    mismatched_tables_count += 1
+                    sys.stdout.write(f'\nTable {table_name} row count mismatch: mysql ({mysql_count}),'
+                                     f' postgresql ({postgres_count})')
+
         sys.stdout.write(f'\nTotal mismatched tables: {mismatched_tables_count},'
                          f' time spent: {datetime.now() - start_time}')
 
@@ -412,7 +432,8 @@ def migrate_data(
 
             if not tables_update_count:
                 if len(migrated_tables) < len(mysql_tables):
-                    raise RuntimeError('Not all tables migrated successfully')
+                    sys.stdout.write(f'\nNot all tables migrated successfully: migrated {len(migrated_tables)},'
+                                     f' total tables {len(mysql_tables)}')
                 break
 
         repair_all(postgres_engine, postgres_metadata)
