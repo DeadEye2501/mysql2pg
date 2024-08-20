@@ -3,6 +3,7 @@ import json
 import string
 import random
 import argparse
+from getpass import getpass
 from datetime import datetime
 from urllib.parse import quote_plus
 from sqlalchemy.dialects.postgresql import INET
@@ -43,13 +44,6 @@ clean_tables = {
 self_ref_tables = ()
 
 non_csv_tables = ()
-
-
-def create_hash():
-    length = 5
-    letters = string.ascii_lowercase
-    random_string = ''.join(random.choice(letters) for _ in range(length))
-    return random_string
 
 
 def generate_random_string(length=5):
@@ -156,7 +150,7 @@ def repair_indexes(connection, mysql_table, postgres_table):
         if not index:
             continue
         index_name = index.name if len(index.name) < 60 else index.name[:59]
-        index_name += f'_{create_hash()}'
+        index_name += f'_{generate_random_string()}'
         query = f'create {"unique " if index.unique else ""}index {index_name} ' \
                 f'on {postgres_table.name} ({f", ".join(mysql_col)});'
         try:
@@ -305,11 +299,9 @@ def create_new_table(connection, mysql_table, table_name, postgres_metadata):
 
 def migrate_data(
     mysql_user,
-    mysql_password,
     mysql_host,
     mysql_name,
     postgres_user,
-    postgres_password,
     postgres_host,
     postgres_name,
     con=False,
@@ -318,6 +310,8 @@ def migrate_data(
     info=False,
     echo=True
 ):
+    mysql_password = getpass('mysql password: ')
+    postgres_password = getpass('postgresql password: ')
     use_csv = False  # TODO: later
     postgres_engine = create_engine(
         f'postgresql://{postgres_user}:{quote_plus(postgres_password)}@{postgres_host}/{postgres_name}')
@@ -466,11 +460,9 @@ def migrate_data(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Migrate data from MySQL to PostgreSQL')
     parser.add_argument('mysql_user', type=str, help='MySQL username')
-    parser.add_argument('mysql_password', type=str, help='MySQL password')
     parser.add_argument('mysql_host', type=str, help='MySQL host')
     parser.add_argument('mysql_name', type=str, help='MySQL database name')
     parser.add_argument('postgres_user', type=str, help='PostgreSQL username')
-    parser.add_argument('postgres_password', type=str, help='PostgreSQL password')
     parser.add_argument('postgres_host', type=str, help='PostgreSQL host')
     parser.add_argument('postgres_name', type=str, help='PostgreSQL database name')
     parser.add_argument('-c', '--con', action='store_true', help='Set to continue previous migration')
@@ -480,6 +472,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    migrate_data(args.mysql_user, args.mysql_password, args.mysql_host, args.mysql_name,
-                 args.postgres_user, args.postgres_password, args.postgres_host, args.postgres_name,
-                 con=args.con, use_csv=args.use_csv, repair=args.repair, info=args.info)
+    migrate_data(args.mysql_user, args.mysql_host, args.mysql_name, args.postgres_user, args.postgres_host,
+                 args.postgres_name, con=args.con, use_csv=args.use_csv, repair=args.repair, info=args.info)
