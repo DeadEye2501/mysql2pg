@@ -6,8 +6,7 @@
 - `pip install -r requirements.txt`
 - создать новую пустую базу `postgres`
 - в `.env` прописать переменные для подключения к этой базе
-- `python manage.py mysql2pg <mysql_user> <mysql_password> <mysql_host> <mysql_db_name> <postgres_user>
-<postgres_password> <postgres_host> <postgres_db_name> <дополнительные ключи>`
+- `python manage.py mysql2pg <mysql_user> <mysql_host> <mysql_db_name> <postgres_user> <postgres_host> <postgres_db_name> <дополнительные ключи>`
 
 Список ключей:
 - `-c` continue. Запустив скрипт с этим флагов можно продолжить прерванную ранее миграцию.
